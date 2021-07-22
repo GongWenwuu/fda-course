@@ -1,0 +1,343 @@
+---
+title: "Appendix"
+author: "GWW 12031299"
+date: "2021/5/27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Functional linear regression: functional-scale
+```{r, message=FALSE, warning=FALSE}
+rm(list = ls())
+library(fda)
+library(ggplot2)
+library(rgl)
+
+setwd("E://R Files/Functional Data Analysis")
+load('Data Sets/lifetable.Rdata')
+birth = seq(1757,1900,length.out=144)
+age = seq(0,80,length.out=81)
+colnames(SwedeMat) = birth
+rownames(SwedeMat) = age
+Swede1900 = SwedeMat$"1900"
+data = as.matrix(SwedeMat)
+#plot(Swede1900) # no cycle
+```
+
+## Smooth data using roughness penalty: B-spline
+```{r, message=FALSE, warning=FALSE}
+bbreaks = seq(0,80,length.out=40) # tuning!
+bbasis = create.bspline.basis(c(0,80), breaks=bbreaks, norder=4) # decide how much to smooth
+gcv = c()
+df = c()
+sse = c()
+Lfd = int2Lfd(2)
+loglam = seq(-8,2,0.5)
+nlam = length(loglam)
+for (i in 1:nlam) {
+  lambda = 10^loglam[i] 
+  D2fdPar = fdPar(bbasis,Lfdobj=Lfd,lambda=lambda) 
+  P_ageratefd = smooth.basis(age,data,D2fdPar)
+  gcv[i] = mean(P_ageratefd$gcv) # we have many smoothers, average it!
+  df[i] = mean(P_ageratefd$df)
+  sse[i] = mean(P_ageratefd$SSE)
+  mainstr = paste('lambda = ',lambda,' df = ',df[i],' gcv = ',gcv[i],sep='')
+}
+# plot(sse,type="b", xlab="log smoothing parameter lambda", ylab="sse")
+res = data.frame(loglam,gcv,df,sse)
+#ggplot(data=res,aes(loglam,gcv))+geom_point(color = "darkred",size=5)+geom_line(linetype="dotted",size=2)+
+  #theme_bw()+theme(panel.grid=element_blank())+
+  #annotate("text",x =-2, y = 0.0115,parse = T,label="lamda == 0.01")
+#ggplot(data=res,aes(loglam,sse))+geom_point(color = "darkred",size=5)+geom_line(linetype="dotted",size=2)+
+  #theme_bw()+theme(panel.grid=element_blank())
+which.min(gcv)
+
+lambda_y = 10^loglam[which.min(gcv)]
+D2fdPar = fdPar(bbasis,Lfdobj=Lfd,lambda=lambda_y) # important!
+swedfd = smooth.basis(age,data,D2fdPar) # dependent variable
+#plot(swedfd$fd,xlab="age", ylab="log hazard rate")
+# plotfit.fd(Swededata,age,swedfd$fd)
+par(mfrow=c(1,1), xpd=NA, bty="n")
+P_ratefd = smooth.basis(age,Swede1920,D2fdPar) # smoother for Swede1920
+#plotfit.fd(Swede1920,age,P_ratefd$fd,title="Swede1920,lambda=0.01", 
+           #xlab="age", ylab= "log hazard rate",cex.lab=1.5, cex.axis=1.5)
+#plotfit.fd(Swede1920,age, P_ratefd$fd, residual = TRUE, titles = 'RMSE = 0.0579',
+           #xlab="age", ylab= "log hazard rate", cex.lab=1.5, cex.axis=1.5)
+P_RMSE = sqrt(mean((eval.fd(age, P_ratefd$fd) - Swede1920)^2))
+print(P_RMSE)
+```
+
+## Functional regression: functional-scale
+```{r, message=FALSE, warning=FALSE}
+## There is no regularized basis function expansion
+ratefd = smooth.basis(age,data,D2fdPar)$fd # Step1: smooth functional dependent variable
+p = 2 
+scaleList = vector("list", p) # initial the independent parameters (scale), important! 
+scaleList[[1]] = rep(1,144) # we have 144 objects
+for (j in 2:p) {
+  xj = birth # scale variables, numeric
+  scaleList[[j]] = xj # the meaning of 1? Step 2
+}
+betabasis = create.bspline.basis(c(0,80), nbasis=28, norder=4) # how to determine the num of betabasis?
+betafdPar = fdPar(betabasis) # add roughness penalty!
+betaList = vector("list",p)
+for (j in 1:p){
+  betaList[[j]] = betafdPar # coefficient function! Step 3
+}
+fsRegressList = fRegress(ratefd, scaleList, betaList) # Smooth! Step 4
+Rsq0 = 1 - mean.fd((ratefd-fsRegressList$yhatfdobj)^2)*mean.fd((center.fd(ratefd))^2)^(-1) 
+#plot(Rsq0, lwd=2,xlab="age",ylab="R2") 
+tfine = seq(0,80,by=0.5)
+errvals = eval.fd(tfine,ratefd-fsRegressList$yhatfdobj)
+# contour(tfine,tfine,errvals%*%t(errvals)/143,col='lightblue',xlab='age',ylab='age') # error covariance
+# for (j in 1:p){
+#   plot(fsRegressList$betaestlist[[j]],col=j,main=paste("beta",j),xlab="age",ylab="coefficients")
+# } # plot(fsRegressList$yhatfdobj$coefs,main="Prediction",xlab="age",ylab="log rate")
+
+## Find out the lambda by CV (leave-one-out)
+loglam = seq(1.6,2.4,0.05)
+# zdata = cbind(scaleList[[1]],scaleList[[2]])
+# CVdata = matrix(0,length(loglam),81)
+# tbetalist = list()
+# tZlist = list()
+# for(i in 1:length(loglam)){
+#   for(j in 1:81){
+#     for(k in 1:2){
+#       tbetalist[[k]] = fdPar(betabasis,2,10^loglam[i])
+#       tZlist[[k]] = zdata[-j,k]
+#     }
+#     tres = fRegress(ratefd[-j],tZlist,tbetalist) # leave-one-out
+#     yhat = 0
+#     for(k in 1:2){
+#       yhat = yhat + zdata[j,k]*tres$betaestlist[[k]]$fd # model fitted
+#     }
+#     err = ratefd[j] - yhat
+#     CVdata[i,j] = inprod(err,err) # error covariance ?(n-p)
+#   }
+# }
+# CV = apply(CVdata,1,mean)
+# save(CV,file="E://R Files/Functional Data/Projects/A3/CVmat.RData")
+lambda = 10^loglam
+load('E://R Files/Functional Data Analysis/Projects/A3/CVmat.RData')
+res = data.frame(lambda,CV)
+# ggplot(data=res,aes(lambda,CV))+geom_point(color = "darkred",size=5)+geom_line(linetype="dotted",size=2)+
+#   theme_bw()+theme(panel.grid=element_blank())+
+#   annotate("text",x =128, y = 2.144,parse = T,label="lamda == 126")
+
+yfdobj = ratefd
+xnumobj = as.numeric(birth)
+model1 = fRegress(yfdobj~xnumobj,data,method="model")
+betabasis = create.bspline.basis(c(0,80), breaks=seq(0,80,length.out=40), norder=4)  
+betafd = fd(rep(1, 42), betabasis) # betalistlist
+betafdPar = fdPar(betafd, Lfdobj=int2Lfd(2), lambda=lambda[which.min(CV)]) # roughness penalty given by CV 125.8925
+model1$betalist$xnumobj = betafdPar # replace the betalist, i.e. the regress coefficient function beta(t)
+fslm_P1 = do.call('fRegress',model1)
+# for (j in 1:2){
+#   plot(fslm_P1$betaestlist[[j]],col=j,main=paste("beta",j),xlab="age",ylab="coefficients")
+# }
+Rsq_1 = 1 - mean.fd((ratefd-fslm_P1$yhatfdobj)^2)*mean.fd((center.fd(ratefd))^2)^(-1) # functional R2, dimension of yhat=the num of ratefd basis
+#plot(Rsq_1,lwd=2,xlab="age",ylab="R2") # intepret it!
+errvals = eval.fd(age,ratefd-fslm_P1$yhatfdobj) # standard error
+#persp3d(0:80,1:144,errvals,xlab='age',ylab='cohort',zlab='error',col='lightblue') # a downward trend of residual
+Sigma = errvals%*%t(errvals)/143 # error covariance
+#contour(age,age,Sigma,col='lightblue',xlab='age',ylab='age')
+#Ftest = Fperm.fd(yfdobj,fslm_P1$xfdlist,fslm_P1$betalist) # creates a null distribution for a test of no effect 
+
+## Model modification 1: wrong!!!
+# xnum2obj = xnumobj^2 # xnumobj + 12
+# model2 = fRegress(yfdobj~xnumobj+xnum2obj,data,method="model")
+# betabasis2 = create.bspline.basis(c(0,80),nbasis=23, norder=4)  
+# betafd2 = fd(rep(1,23), betabasis2) 
+# betafdPar2 = fdPar(betafd2, Lfdobj=int2Lfd(2), lambda=lambda[which.min(CV)])
+# model2$betalist$xnumobj = betafdPar2
+# model2$betalist$xnum2obj = betafdPar2
+# fslm_P2 = do.call('fRegress',model2) # Negative eigenvalue of coefficient matrix, Why???  may be beta basis is not right, tuning it!
+# # fslm_P2 = fRegress(yfdobj, c(fslm_P1$xfdlist,list((fslm_P1$xfdlist$xnumobj)^2)),c(fslm_P1$betalist,list(betafdPar)))
+# for (j in 1:3){
+#   plot(fslm_P2$betaestlist[[j]],col=j,main=paste("beta",j),xlab="age",ylab="coefficients")
+# }
+# Rsq_2 = 1 - mean.fd((ratefd-fslm_P2$yhatfdobj)^2)*mean.fd((center.fd(ratefd))^2)^(-1)
+# plot(Rsq_2,lwd=2,xlab="age",ylab="R2") 
+# errvals = eval.fd(age,ratefd-fslm_P2$yhatfdobj)
+# persp3d(0:80,1:144,errvals,xlab='age',ylab='cohort',zlab='error',col='lightblue') 
+# Sigma = errvals%*%t(errvals)/142
+
+## Prediction
+yhatfd1920_s = fslm_P1$betaestlist[[1]]$fd + (1920-1757)*fslm_P1$betaestlist[[2]]$fd
+yhatvals_1920_s = eval.fd(age,yhatfd1920_s)
+#plot(Swede1920,ylim=c(-7,-2),col=1,lwd=2,xlab="age",ylab="lograte")
+#plot(yhatvals_1920_s,col=2,lwd=2,xlab="age",ylab="lograte")
+
+## Coefficient functions along with C.I.
+y2cMap = smooth.basis(age,data,D2fdPar)$y2cMap # the value of y2cMap is given by smoothing dependent variable
+stderrList = fRegress.stderr(fslm_P1, y2cMap, Sigma) # formaula!
+betastderrlist = stderrList$betastderrlist
+# for (j in 1:p){
+#   beta = fslm_P1$betaestlist[[j]]$fd
+#   plot(beta, lwd=2,xlab="age",ylab="coefficients") 
+#   lines(beta + 2*betastderrlist[[j]],lty=2, lwd=1)
+#   lines(beta - 2*betastderrlist[[j]], lty=2, lwd=1)
+#   abline(h=0,lty=3)
+# }# plotbeta(fslm_P$betaestlist,betastderrlist,age) # plot all beta coeffecients
+```
+
+## Functional regression: functional-functional
+```{r, message=FALSE, warning=FALSE}
+ratefd = smooth.basis(age,data,D2fdPar)$fd
+yfd = ratefd[2:144]
+xfd = ratefd[1:143] # lag 1 concurrent?
+model3 = fRegress(yfd~xfd,method="model")
+betabasis = create.bspline.basis(c(0,80),norder=4,nbasis=32) # tuning it!
+betafd = fd(rep(1, 32), betabasis)
+# detach(package:fda)
+# library(fda,lib.loc="D:/R/R-4.0.2/library/fdaold")
+loglam = seq(1.6,2.4,0.05)
+# nlam = length(loglam)
+# SSE.CV = rep(0,nlam)
+# for (i in 1:nlam){
+#   lambda = 10^loglam[i]
+#   betafdPar = fdPar(betafd, Lfdobj=int2Lfd(2),lambda=lambda)
+#   model$betalist$xfd = betafdPar 
+#   flm_cv = do.call('fRegress.CV',model)
+#   SSE.CV[i] = flm_cv$SSE.CV
+# }
+# min(SSE.CV)
+# save(SSE.CV, file = "E://R Files/Functional Data/Projects/A3/fCVmat.RData") # there are many variables
+# CV = ggplot(NULL,aes(loglam,SSE.CV/100))+geom_point(color = "darkred")+geom_abline(slope=1)+theme_bw()+theme(panel.grid=element_blank())+xlab("log_10 roughness parameter lambda") +ylab("Cross−validation score CV(*10^2)")
+# ggsave(CV,filename = "CV.png",width = 6,height = 4)
+#detach(package:fda)
+#library(fda)
+load('E://R Files/Functional Data Analysis/Projects/A3/fCVmat.RData')
+#plot(10^loglam, SSE.CV/100, type="b", xlab="log roughness parameter lambda", ylab="Cross−validation score CV(*10^2)")
+betafdPar = fdPar(betafd, 2,lambda=110.3395) # we only have one penalty, may be wrong!!!
+model3$betalist$xfd = betafdPar 
+fflm_P = do.call('fRegress',model3)
+## Assessing the fit
+errmat = eval.fd(age, yfd - fflm_P$yhatfdobj) 
+Sigma = errmat%*%t(errmat)/144
+# resid = data[,-1] - eval.fd(age,fflm_P$yhatfdobj)
+# plot(resid[,143],cex.lab=1.5,cex.axis=1.5,xlab="age",ylab="residual")
+# tfine = seq(0,80,by=0.5)
+# yratemat = eval.fd(tfine,yfd)
+# yratemeanvec = eval.fd(tfine,mean.fd(yfd))
+# ratehatmat = eval.fd(tfine, fflm_P$yhatfdobj)
+# resmat = yratemat - ratehatmat
+# resmat0 = yratemat - yratemeanvec %*% matrix(1,1,143)
+# SSE0 = apply((resmat0)^2, 1, sum)
+# SSE1 = apply(resmat^2, 1, sum)
+# Rsq_2 = (SSE0-SSE1)/SSE0
+# plot(tfine[-1],Rsq_2[-1],xlab="age",ylab="R2")
+# ## C.I.
+# Sigma = var(t(resid))
+#persp3d(age,1:143,errmat,xlab='age',ylab='cohort',zlab='error',col='lightblue') # better behaved than the previous model
+Rsq_3 = 1 - mean.fd((yfd-fflm_P$yhatfdobj)^2)*mean.fd((center.fd(yfd))^2)^(-1)
+#plot(Rsq_3,lwd=2,xlab="age",ylab="R2")
+# contour(age,age,Sigma,col='lightblue',xlab='age',ylab='age')
+# Ftest = Fperm.fd(yfd,fflm_P$xfdlist,fflm_P$betalist)
+plot(Rsq_3,ylim=c(0.1,1),col=3,lwd=2,xlab="age",ylab="R2")
+lines(Rsq_1,col=4,lwd=2)
+legend(x='bottomright',legend=c('Scale model','Lag one model'),lwd=2,col=c(3,4))
+## C.I.
+y2cMap = smooth.basis(age,data,D2fdPar)$y2cMap
+stderrList = fRegress.stderr(fflm_P,y2cMap,Sigma)
+betastderrlist = stderrList$betastderrlist
+beta0 = fflm_P$betaestlist$const$fd
+# plot(beta0,ylim=c(-0.95,0.5),xlab="age",ylab="coefficients", main="intercept")
+# lines(beta0 + 2*betastderrlist[[1]],lty=2, lwd=1)
+# lines(beta0 - 2*betastderrlist[[1]], lty=2, lwd=1)
+# beta1 = fflm_P$betaestlist$xfd$fd
+# plot(beta1,ylim=c(0.75,1.25),xlab="age",ylab="coefficients",main="0ne lag intercept")
+# lines(beta1+2*betastderrlist[[2]],lty=2, lwd=1)
+# lines(beta1-2*betastderrlist[[2]] ,lty=2, lwd=1)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+## Prediction for functional-functional
+ratefd = smooth.basis(age,data,D2fdPar)$fd
+yfd = ratefd[2:144]
+xfd = ratefd[1:143]
+betabasis_ = create.bspline.basis(c(0,80),norder=4,nbasis=23)
+inbasis = eval.penalty(betabasis_,0) # part of penalty
+inLbasis = eval.penalty(betabasis_,2) 
+R0 = inLbasis
+Rs = inLbasis%x%inbasis
+Rt = inbasis%x%inLbasis
+xphi = inprod(betabasis_,xfd) # integral
+sxphi = apply(xphi,1,sum) # summation of objects, dimension is same with betabasis_
+ypsi = inprod(betabasis_,yfd) 
+sypsi = apply(ypsi,1,sum)
+yxphi = (xphi%x%matrix(1,23,1))*(matrix(1,23,1)%x%ypsi) # beta*integral
+yxphi = apply(yxphi,1,sum) 
+inbetay = inprod(betabasis_,bbasis) # betabasis_*smooth funtional data
+X = xphi%*%t(xphi)
+Xmat = rbind( cbind( inbasis, t(sxphi)%x%inbasis ),
+              cbind( sxphi%x%inbasis, X%x%inbasis) ) # important
+lambda0 = 1e-5
+lambdas = 1e0
+lambdat = 1e0
+penmat = rbind( cbind(lambda0*R0, matrix(0,23,23^2)),
+                cbind(matrix(0,23^2,23),lambdas*Rs+lambdat*Rt)) # important
+ymat = c(sypsi,yxphi)
+betacoefs = solve(Xmat+penmat,ymat) # beta1coefs = fflm_P$betaestlist[[2]]$fd$coefs connections?
+beta1Cmat = matrix(betacoefs[23+(1:23^2)],23,23) # important beta(s,t)
+
+xfd_1900 = swedfd$fd[2:144]
+xphi_1901 = inprod(betabasis_,xfd_1900)[,143]
+yhatfd_1901_f = fd(betacoefs[1:23]%x%matrix(1,1,1),betabasis_) +fd(beta1Cmat%*%xphi_1901,betabasis_)
+pre1901_f = eval.fd(age,yhatfd_1901_f)
+
+yhatfd_last = yhatfd_1901_f
+for (i in 1:20){
+  xfd_new = yhatfd_last
+  xphi_new=inprod(betabasis_,xfd_new)
+  yhatfd_new = fd(betacoefs[1:23]%x%matrix(1,1,1),betabasis_) +fd(beta1Cmat%*%xphi_new,betabasis_)
+  yhatfd_last=yhatfd_new
+}
+yhatvals_1920_f=eval.fd(age,yhatfd_new)
+# plot(yhatvals_1920_f,ylim=c(-7,-2),xlab="age",ylab="lograte",col=1,lwd=2)
+# lines(Swede1920,col=2,lwd=2)
+# legend(x='bottomright',legend=c('True','Forecast'),lwd=2,col=c(1,2))
+```
+
+## Gaussian process regression
+```{r, message=FALSE, warning=FALSE}
+library(GPFDA)
+library(MASS)
+
+set.seed(12345)
+n = 1000
+X=matrix(1:4000,n,4)
+X[,1]=seq(-5,10,len=n);X[,2]=seq(0,1,len=n);X[,3]=seq(-15,-10,len=n);X[,4]=seq(1,2,len=n)
+y = 0.2*X[,1] * abs(X[,1])^(1/3) - 4*sin(X[,2]) + exp(X[,3]) + log(X[,4])
+hp = list('linear.a'=rep(log(10),4),'linear.i'=log(10),'pow.ex.w'=rep(log(10),4),'pow.ex.v'=log(5),'vv'=log(1))
+Sigma = cov.linear(hyper=hp, input=X)+cov.pow.ex(hyper=hp,input=X,gamma=2)+diag(exp(hp$vv),n)
+epsilon = mvrnorm(n=1, mu=rep(0,n), Sigma=Sigma)
+y = y+epsilon
+
+index = 1:n
+sample_index = sample(index,n*0.7,replace=F)
+Xtrain = X[sample_index, ]
+ytrain = y[sample_index]
+Xtest = X[-sample_index, ]
+ytest = y[-sample_index]
+
+# kernel = c("linear","pow.ex")
+# powfit = gpr(input=Xtrain,response=ytrain,kernel,trace=2)
+# save(powfit,file='E://R Files/Functional Data Analysis/Projects/A3/powfit.RData')
+load('E://R Files/Functional Data Analysis/Projects/A3/powfit.RData')
+unlist(sapply(powfit$hyper,exp))
+plot(powfit)
+
+predGPR = gprPredict(train=powfit,inputNew=Xtest, noiseFreePred=T)
+plot(predGPR)
+
+plot(ytest, predGPR$pred.mean, xlim=range(c(ytest, predGPR$pred.mean)), ylim=range(c(ytest, predGPR$pred.mean)),xlab="true values",ylab="fitted values")
+lines(x=range(c(ytest, predGPR$pred.mean)), y=range(c(ytest, predGPR$pred.mean)), lwd=2, col=4)
+R2_gpr = 1-sum((predGPR$pred.mean - ytest)^2)/sum((mean(ytest) - ytest)^2)
+
+```
+
