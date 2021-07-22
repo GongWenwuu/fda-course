@@ -1,0 +1,541 @@
+---
+title: "FPCA and Functional Linear regression"
+author: "GWW 12031299"
+date: "2021/4/16"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+rm(list = ls())
+library(fda)
+library(ggplot2)
+library(reshape2)
+library(freqdom)
+setwd("E://R Files/Functional Data Analysis")
+load('Data Sets/fly.Rdata')
+eggcount = medfly$eggcount
+day = 1:26
+```
+
+# fPCA and dynamic fPCA
+## Smooth the data under best basis function num 12 basis 
+```{r}
+# eggcountfdata = fdata(t(medfly$eggcount),names=list("day","eggcount")) # convert data to fdata 
+# lifespan = medfly$lifetime
+# nb = floor(seq(5,26,len=6))
+# lam = 2^(-5:15)
+# optbasis = optim.basis(eggcountfdata,lambda=lam,numbasis=nb,type.basis="bspline")
+# basis_choice = data.frame(lam, t(optbasis$gcv))
+# colnames(basis_choice) = c("lambda","numbasis1","numbasis2","numbasis3")
+# png(file = "Basis_S.png")
+# matplot(t(optbasis$gcv),type="l",main="GCV with bspline basis",xlab="num of bspline",ylab="GCV value") # verify the choose of num 12 basis
+# dev.off()
+
+bbasis_ = create.bspline.basis(c(0,26), nbasis = 12, norder=4) 
+S_dayEggfd = with(medfly, smooth.basis(day,eggcount,
+        bbasis_, fdnames=list("Day", "lifespan", "eggcount"))$fd)
+# with(medfly, plotfit.fd(eggcount,day,S_dayEggfd,ask=TRUE)) # a Functional Data Object With Data
+png(file = "Smooth.png")
+plot(S_dayEggfd,ylim=c(-20,120)) # the aligned original recordings of the force relative to a baseline value
+dev.off()
+
+S_eggcountpcaobj = pca.fd(fdobj=S_dayEggfd,nharm=4,fdPar(bbasis_))
+S_eggcountpcaobj$varprop # 0.3745757 0.2957662 0.1685607 0.0437355
+pcanum = c(1:8)
+S_eigenvalues = S_eggcountpcaobj$values[1:8]
+S_cum_eigenvalues = cumsum(S_eigenvalues)/sum(S_eigenvalues)
+
+variation_S = ggplot(NULL,aes(pcanum,S_cum_eigenvalues))+geom_point(color = "darkred")+geom_line(linetype="dotted")+geom_hline(yintercept=0.9, linetype='dashed',size =1,col=2)+   theme_bw()+theme(panel.grid=element_blank())+xlab("No of component") +ylab("cumulative variance explained")
+ggsave(variation_S,filename = "variationS.png",width = 8,height = 4)
+
+S_harmfd = S_eggcountpcaobj$harmonics # new basis function given by PCA
+S_harmvals = melt(data.frame(day,eval.fd(day,S_harmfd)),id="day") # PC values
+colnames(S_harmvals) = c("day","PC","value")
+pc_S = ggplot(S_harmvals,aes(day,value,group=PC,color=PC,shape=PC))+geom_line(linetype="dashed")+theme_bw()+theme(panel.grid=element_blank())+xlab("day")+ylab("PC value") # the first four principal component curves for data without regularization, there is substantial variability and a clear need for smoothing or regularizing of the estimated principal component curves
+ggsave(pc_S,filename = "pcS.png",width = 8,height = 4)
+```
+
+## Roughness smooth the data first, then carry out an unsmoothed PCA
+```{r}
+bbasis = create.bspline.basis(rangeval=c(0,26), nbasis = 26, norder=4) 
+D2fdPar = fdPar(bbasis,Lfdobj=int2Lfd(2),lambda=10) # best lambda is given by A1
+P_dayEggfd = smooth.basis(day,eggcount,D2fdPar,
+                        fdnames=list("Day", "lifespan", "eggcount"))$fd
+png(file = "Roughness.png")
+plot(P_dayEggfd) 
+dev.off()
+
+eggcountpcaobj = pca.fd(fdobj=P_dayEggfd,nharm=4, harmfdPar=D2fdPar)
+pcanum = c(1:8)
+eigenvalues = eggcountpcaobj$values[1:8]
+cum_eigenvalues = cumsum(eigenvalues)/sum(eigenvalues)
+setwd("E://R Files/Functional Data/Projects/A2")
+write.table(eggcountpcaobj$scores[,1:4],"eggcount-pc4", col.names = c("PC1","PC2","PC3","PC4"))
+
+variation_P = ggplot(NULL,aes(pcanum,cum_eigenvalues))+geom_point(color = "darkred")+geom_line(linetype="dotted")+geom_hline(yintercept=0.9, linetype='dashed',size =1,col=2)+
+        theme_bw()+theme(panel.grid=element_blank())+xlab("No of component") +ylab("cumulative variance explained")
+ggsave(variation_P,filename = "variationP.png",width = 8,height = 4)
+
+harmfd = eggcountpcaobj$harmonics # new basis function given by PCA
+harmvals = data.frame(day,eval.fd(day,harmfd)) # PC values
+harmvals = melt(harmvals,id="day")
+colnames(harmvals) = c("day","PC","value")
+pc_P = ggplot(harmvals,aes(day,value,group=PC,color=PC,shape=PC))+geom_line(linetype="dashed")+theme_bw()+theme(panel.grid=element_blank())+xlab("day")+ylab("PC value")
+ggsave(pc_P,filename = "pcP.png",width = 8,height = 4)
+
+sharmvals = eval.fd(day,harmfd)%*%diag(sqrt(eggcountpcaobj$values[1:4]))
+colnames(sharmvals) = c("PC1","PC2","PC3","PC4")
+sharmvals = melt(data.frame(day,sharmvals),id="day")
+colnames(sharmvals) = c("day","PC","value")
+pc_P_c = ggplot(sharmvals,aes(day,value,group=PC,color=PC,shape=PC))+geom_line(linetype="dashed")+theme_bw()+theme(panel.grid=element_blank())+xlab("day")+ylab("PC value")
+ggsave(pc_P_c,filename = "pcPcentered.png",width = 8,height = 4)
+```
+
+## Visualizing the results: plotting components as perturbations of the mean)
+```{r warning=FALSE, fig.show="hide"}
+plot.pca.fd(eggcountpcaobj, cex.main=0.9) # the effect on the overall mean curve of adding and subtracting a suitable multiple of each of the first four smoothed principal component curves
+
+mean_ = eggcountpcaobj$meanfd$coefs
+effects = matrix(0,26,4)
+d = rep(0,4)
+eigen_ = eval.fd(day,eggcountpcaobj$harmonics)
+for (i in c(1:4)){
+  d[i] = sqrt(eggcountpcaobj$values)[i]
+  effects[,i] = 2*d[i]*eigen_[,i]
+} # the variation in the functional data that is contributed by each eigenfunction
+up_ = mean_+effects[,1]
+lower_ = mean_-effects[,1]
+perturbations = data.frame(day,mean_,up_,lower_)
+perturbations = melt(perturbations,id="day")
+colnames(perturbations) = c("day","PC","value")
+effect_ = ggplot(perturbations,aes(day,value,group=PC,color=PC,shape=PC))+geom_line(linetype="dashed")+theme_bw()+theme(panel.grid=element_blank())+xlab("day")+ylab("PC value")# the effects on the mean curve
+ggsave(effect_,filename = "effect.png",width = 8,height = 4)
+eggcountvarmx = varmx.pca.fd(eggcountpcaobj) # Varimax rotation: find a more interpretable basis
+plot(eggcountvarmx)
+```
+
+## Dynamic fPCA: DPCA decomposition outputs components which are uncorrelated in time
+```{r}
+X_eggcount = as.matrix(eggcount)
+eggcountpca = prcomp(X_eggcount, center=TRUE,rank.=4)
+summary(eggcountpca) # the explained variation is smaller than no roughness PCA
+
+eggcountdpca = dpca(X_eggcount, q=5, Ndpc=4)
+dvar_ = eggcountdpca$var
+cat("var contribution from dpca output \n \t",dvar_[1:4])
+
+dvariation = ggplot(NULL,aes(pcanum,cumsum(dvar_[1:8])))+geom_point(color = "darkred")+geom_line(linetype="dotted")+geom_hline(yintercept=0.9, linetype='dashed',size =1,col=2)+ theme_bw()+theme(panel.grid=element_blank())+xlab("No of component") +ylab("cumulative variance explained")
+ggsave(dvariation,filename = "dvariation.png",width = 8,height = 4)
+```
+
+# Functional Linear Models (Scale-functional)
+```{r}
+R2 = function(y,y_hat,y_train_bar){
+  R2 = 1-sum((y-y_hat)^2)/sum((y-y_train_bar)^2)
+  return(R2)
+}
+
+osR2 = function(y_test,y_pre,y_train_bar){
+  osR2 = 1-sum((y_test-y_pre)^2)/sum((y_test-y_train_bar)^2)
+  return(osR2)
+}
+
+# flm_stdlist = function(y,y_hat,flm,xfd){
+#   N = length(y)
+#   resid = y - y_hat
+#   SigmaE = sum(resid^2)/(N-flm$df)*diag(rep(1,N))
+#   y2cMap = xfd$y2cMap
+#   stderrList = fRegress.stderr(flm, y2cMap, SigmaE)
+#   return(stderrList) # flm results and contain the beta_std, xfd is a smooth.basis that generates the dependent variable objects. 
+# }
+
+flm_stdlist = function(y,y_hat,flm,basisnum){
+  N = length(y)
+  resid = y - y_hat
+  SigmaE = sum(resid^2)/(N-flm$df)*diag(rep(1,N))
+  y2cMap = diag(N)
+  stderrList = fRegress.stderr(flm, y2cMap, SigmaE)
+  return(stderrList) # for scaled response variable
+}
+
+betaconfInter = function(beta_hat,beta_std,beta_num){
+  betanum = c(1:beta_num) # coefficient beta num
+  betaup = beta_hat+2*beta_std
+  betalow = beta_hat-2*beta_std
+  betaconf = data.frame(betanum,betaest,betaup,betalow)
+  return(betaconf)
+}
+```
+
+## Scalar-on-functional regression model
+### Regression using restricted basis functions: No roughness lambda
+```{r}
+train_ind = 1:35
+X_train = eggcount[,train_ind]
+X_test = eggcount[,-train_ind]
+bbasis_ = create.bspline.basis(c(0,26), nbasis=12, norder=4) # not full model, this result is given by A1
+xfd = smooth.basis(day,X_train,
+        bbasis_, fdnames=list("Day", "lifespan", "eggcount")) # estimated value of x(t)
+xfdobj_S = xfd$fd # this fob is relevent to the xfdlist name of flm_S
+
+lifespan = as.numeric(medfly$lifetime[train_ind])
+lifespan_bar = mean(lifespan)
+y_test = as.numeric(medfly$lifetime[-train_ind])
+
+flm_S = fRegress(lifespan~xfdobj_S) # model building in another way
+
+lifespan_fit_S = flm_S$yhatfdobj
+# Fitted_S = ggplot(NULL,aes(lifespan_fit_S,lifespan))+geom_point(color = "darkred")+geom_abline(slope=1)+theme_bw()+theme(panel.grid=element_blank())+xlab("True value") +ylab("Fitted value")
+# ggsave(Fitted,filename = "Fitted_S.png",width = 8,height = 4)
+
+R2_S = R2(lifespan,lifespan_fit_S,lifespan_bar)
+print(paste("R2 =",R2_S)) # R2 = 0.992427274348569
+RMSE_S = sqrt(mean((lifespan-lifespan_fit_S)^2))
+print(paste("RMSE =",RMSE_S))
+
+betaeststd = flm_stdlist(lifespan,lifespan_fit_S,flm_S,xfd) # to calculate the projection matrix: solve(t(Z)*Z+lambdaR0)t(Z)
+
+X_testfd = smooth.basis(day,X_test,
+        bbasis_, fdnames=list("Day", "lifespan", "eggcount"))$fd
+X_testfdobj = fRegress(y_test~X_testfd, method="model")$xfdlist$X_testfd
+
+lifespan_pre_S = inprod(flm_S$betaestlist$xfdobj_S$fd, X_testfdobj) # matrix calculation to get prediction value
+osR2_S = osR2(y_test,lifespan_pre_S,lifespan_bar)
+print(paste("osR2 =",osR2_S)) # 0.980643976796598
+
+betaestfd = betaeststd$betaestlist$xfdobj_S$fd
+
+png(file = "Betafunc_S.png")
+plot(betaestfd, xlab="Day", ylab="Weight function Beta", lwd=2, col=2,col="blue",ylim=c(-0.8,1.8))
+betaestfd_std = betaeststd$betastderrlist[[2]]
+lines(betaestfd+2*betaestfd_std, lty=2, lwd=2, col="blue") 
+lines(betaestfd-2*betaestfd_std, lty=2, lwd=2, col="blue")
+dev.off()
+
+betaest = betaeststd$betaestlist$xfdobj_S$fd$coefs # coefficient function
+# betaestfd = flm_S$betaestlist$xfdobj_S$fd
+# all.equal(betaestfd1,betaestfd)
+betaest_std = betaeststd$betastderrlist[[2]]$coefs # betahat_std
+betaconf = betaconfInter(betaest,betaest_std,12) # confidence interval
+colnames(betaconf) = c("num","betahat","up","low")
+betaconf = melt(betaconf,id="num")
+colnames(betaconf) = c("num","Beta","value")
+Beta_S = ggplot(betaconf,aes(num,value,group=Beta,color=Beta,shape=Beta))+geom_line(linetype="dashed")+geom_hline(yintercept=0.0, linetype='dashed',size =1,col=2)+theme_bw()+theme(panel.grid=element_blank())+xlab("Betalist")+ylab("Lifetime Reg. Coeff.") # Regression function Beta for fruit flies' lifetime
+ggsave(Beta_S,filename = "Beta_S.png",width = 8,height = 4)
+```
+
+### Choice of lambda
+```{r, message=FALSE, warning=FALSE,include=FALSE}
+# xfdlist = list(const=rep(1, 50), xfdobj=xfdobj) 
+# betabasis_cons = create.constant.basis(c(0, 26))
+# betafd_cons = fd(0, betabasis_cons)
+# betafdPar_cons = fdPar(betafd_cons) 
+# betafd_basis = create.bspline.basis(c(0,26), nbasis=26, norder=4)
+# betafdPar_basis = fdPar(betafd_basis, Lfdobj=int2Lfd(2), lambda=10) 
+# betalist = list(const=betafdPar_cons, basisfd=betafdPar_basis) 
+
+bbasis_ = create.bspline.basis(c(0,26), nbasis=12, norder=4) 
+X_train = eggcount[,1:35]
+lifespan = as.numeric(medfly$lifetime[1:35])
+xfdobj = smooth.basis(day,X_train,
+        bbasis_, fdnames=list("Day", "lifespan", "eggcount"))$fd 
+xfdlist = list(const=rep(1, 35), xfdobj=xfdobj) 
+
+betabasis_cons = create.constant.basis(c(0, 35))
+betafd_cons = fd(1, betabasis_cons)
+betafdPar_cons = fdPar(betafd_cons) 
+betafd_basis = create.bspline.basis(c(0,26), nbasis=35, norder=4) 
+betafdPar_basis = fdPar(betafd_basis, Lfdobj=int2Lfd(2), lambda=10) 
+betalist = list(const=betafdPar_cons, basisfd=betafdPar_basis)
+
+detach(package:fda)
+library(fda,lib.loc="D:/R/R-4.0.2/library/fdaold")
+loglam = seq(-0.1,3.9,0.01)
+nlam = length(loglam)
+SSE.CV = rep(0,nlam)
+for (i in 1:nlam){
+  lambda = 10^loglam[i]
+  betalist$basisfd$lambda = lambda
+  betalist_i = betalist
+  flm_cv = fRegress.CV(lifespan, xfdlist, betalist_i)
+  SSE.CV[i] = flm_cv$SSE.CV
+}
+save(SSE.CV, file = "CV.RData") # there are many variables
+plot(loglam, SSE.CV/1000, type="b", xlab="log roughness parameter lambda", ylab="Cross−validation score CV(*10^3)")
+
+CV = ggplot(NULL,aes(loglam,SSE.CV/1000))+geom_point(color = "darkred")+geom_abline(slope=1)+theme_bw()+theme(panel.grid=element_blank())+xlab("log_10 roughness parameter lambda") +ylab("Cross−validation score CV(*10^3)")
+ggsave(CV,filename = "CV.png",width = 6,height = 4)
+min(SSE.CV)
+
+```
+
+### Regularization with roughness penalties: Best lambda
+```{r, message=FALSE, warning=FALSE}
+detach(package:fda)
+library(fda)
+train_ind = 1:35
+X_train = eggcount[,train_ind]
+X_test = eggcount[,-train_ind]
+lifespan = as.numeric(medfly$lifetime[train_ind])
+lifespan_bar = mean(lifespan)
+y_test = as.numeric(medfly$lifetime[-train_ind])
+
+bbasis_ = create.bspline.basis(c(0,26), nbasis=12, norder=4) 
+xfd = smooth.basis(day,X_train,
+        bbasis_, fdnames=list("Day", "lifespan", "eggcount")) 
+xfdobj = xfd$fd
+model = fRegress(lifespan~xfdobj, method="model")
+
+lambda =  15074.36 # 22510
+betabasis_bbasis = create.bspline.basis(rangeval=c(0,26), nbasis = 35, norder=4) 
+betafd = fd(rep(1, 35), betabasis_bbasis) # betalistlist
+betafdPar = fdPar(betafd, Lfdobj=int2Lfd(2), lambda=lambda) # roughness betalist
+model$betalist$xfdobj = betafdPar # replace the betalist, i.e. the regress coefficient function beta(t)
+flm_P = do.call('fRegress',model) 
+lifespan_fit = flm_P$yhatfdobj
+# Fitted = ggplot(NULL,aes(lifespan_fit,lifespan))+geom_point(color = "darkred")+geom_abline(slope=1)+theme_bw()+theme(panel.grid=element_blank())+xlab("True value") +ylab("Fitted value")
+# ggsave(Fitted,filename = "Fitted.png",width = 8,height = 4)
+
+R2_P = R2(lifespan,lifespan_fit,lifespan_bar)
+print(paste("R2 =",R2_P)) # R2 = 0.987987921981976, smaller than no penalty
+RMSE_P = sqrt(mean((lifespan-lifespan_fit)^2))
+print(paste("RMSE =",RMSE_P))
+
+X_testfd = smooth.basis(day,X_test,
+        bbasis_, fdnames=list("Day", "lifespan", "eggcount"))$fd
+X_testfdobj = fRegress(y_test~X_testfd, method="model")$xfdlist$X_testfd
+lifespan_pre_P = inprod(flm_P$betaestlist$xfdobj$fd, X_testfdobj) # useage of predict
+osR2_P = osR2(y_test,lifespan_pre_P,lifespan_bar)
+print(paste("osR2 =",osR2_P)) # 0.976094642992361
+
+betaeststd = flm_stdlist(lifespan,lifespan_fit,flm_P,35) # scaled response
+# betaeststd = flm_stdlist(lifespan,lifespan_fit,flm_P,xfd) # functional response
+betaestfd = betaeststd$betaestlist$xfdobj$fd
+png(file = "Betafunc.png")
+plot(betaestfd, xlab="Day", ylab="Weight function under roughness", lwd=2, col=2,col="blue",ylim=c(-0.8,1.8))
+betaestfd_std = betaeststd$betastderrlist[[2]]
+lines(betaestfd+2*betaestfd_std, lty=2, lwd=2, col="blue") 
+lines(betaestfd-2*betaestfd_std, lty=2, lwd=2, col="blue")
+dev.off()
+
+betaest = betaeststd$betaestlist$xfdobj$fd$coefs 
+betaest_std = betaeststd$betastderrlist[[2]]$coefs 
+betaconf = betaconfInter(betaest,betaest_std,35)
+colnames(betaconf) = c("num","betahat","upbound","lowbound")
+betaconf = melt(betaconf,id="num")
+colnames(betaconf) = c("num","RegCoeff","value")
+Beta = ggplot(betaconf,aes(num,value,group=RegCoeff,color=RegCoeff,shape=RegCoeff))+geom_line(linetype="dashed")+geom_hline(yintercept=0.0, linetype='dashed',size =1,col=2)+theme(legend.position = c(0, 0),legend.justification = c(0, 1))+theme_bw()+theme(panel.grid=element_blank())+xlab("50 Bspline basis functions ")+ylab("Lifetime Reg. Coeff.") #lambda=22510
+ggsave(Beta,filename = "Beta.png",width = 8,height = 4)
+```
+
+## Functional principal component regression
+```{r}
+eggcountpc=read.table("E://R Files/Functional Data/Projects/A2/eggcount-pc4",header = TRUE,row.names = 1)
+pcscore = as.matrix(eggcountpc)[,1:3]
+pclifespan = as.matrix(medfly$lifetime)
+fpclm=lm(pclifespan~pcscore)
+summary(fpclm)
+R2_pca = R2(pclifespan,fpclm$fitted.values,lifespan_bar)
+print(paste("R2 =",R2_pca)) # R2=0.969501679534734
+
+fpcabeta = fpclm$coef[2]*eggcountpcaobj$D2fdPar[1]+
+fpclm$coef[3]*eggcountpcaobj$D2fdPar[2]+
+fpclm$coef[4]*eggcountpcaobj$D2fdPar[3]+
+fpclm$coef[5]*eggcountpcaobj$D2fdPar[4]
+plot(fpcabeta) 
+
+fpccoefvar = summary(fpclm)$coefficients[,2]^2 # Confidence Intervals
+fpcbetavar = fpccoefvar[2]*eggcountpcaobj$D2fdPar[1]^2+
+  fpccoefvar[3]*eggcountpcaobj$D2fdPar[2]^2+
+  fpccoefvar[4]*eggcountpcaobj$D2fdPar[3]^2+
+  fpccoefvar[5]*eggcountpcaobj$D2fdPar[4]^2
+lines(fpcabeta+2*sqrt(pcbetavar))
+lines(fpcabeta-2*sqrt(fpcbetavar))
+```
+## Functional penalized principal component regression
+```{r Data, message=FALSE, warning=FALSE}
+library(fda.usc)
+load('E://R Files/Functional Data/Data Sets/fly.Rdata')
+train_ind = 1:35
+eggcountdata = t(medfly$eggcount)
+eggcountfdata = fdata(eggcountdata,names=list("day","eggcount")) # convert data to fdata 
+X_train = eggcountfdata[train_ind,]
+X_test = eggcountfdata[-train_ind,]
+lifespan = medfly$lifetime[train_ind] # Scalar response
+lifespan_bar = mean(lifespan)
+y_test = medfly$lifetime[-train_ind]
+
+fpcreg = fregre.pc(fdataobj=X_train,y=lifespan,kmax=4,P=c(0,0,1))# Functional penalized PC regression using fpc
+fpcreg # R2=0.9435122
+
+lifespan_pre_PPCA = predict(fpcreg,X_test)
+osR2_PPCA = osR2(y_test,lifespan_pre_PPCA,lifespan_bar)
+print(paste("osR2 =",osR2_PPCA)) # 0.919510231267232
+
+fppcreg = fregre.pls.cv(fdataobj=X_train,y=lifespan,kmax=8,lambda=0:5,P=c(0,0,1)) # Selects the PPLS components with best estimates 
+fppcreg$fregre.pls # R2=0.9871092
+
+lifespan_pre_PPCA_cv = predict(fppcreg$fregre.pls,X_test)
+osR2_PPCA_cv = osR2(y_test,lifespan_pre_PPCA_cv,lifespan_bar)
+print(paste("osR2 =",osR2_PPCA_cv)) # 0.965586093772263
+```
+
+# Functional Linear Models (Functional-scale)
+```{r Data, message=FALSE, warning=FALSE}
+Lcoef = c(0,(2*pi/365)^2,0)
+harmaccelLfd = vec2Lfd(Lcoef, c(0,365))
+daybasis365 = create.fourier.basis(c(0, 365), 365) # saturated 
+lambda = 1e6 # roughness penalty for response variable
+tempfdPar =fdPar(daybasis365, harmaccelLfd, lambda) 
+tempfd =smooth.basis(day.5, daily$tempav, tempfdPar)$fd # response data Step 1.1
+plot(tempfd, col=1, main="Temperature profiles of all cities")
+plot(tempfd, col=factor(CanadianWeather$region),
+     main="Temperature profiles by region")
+coef36 = cbind(tempfd$coef,matrix(0,365,1)) # why we need cbind?
+temp36fd = fd(coef36,daybasis365,tempfd$fdnames) # functional response Step 1.2 ??
+
+# Then we create dummy variable for catergory data (dependent)
+regions = unique(CanadianWeather$region)
+regions # scalar dependent, a list which need to assign dummy value
+p = length(regions) + 1 # catergory + constant effect 
+regionList = vector("list", p) # initial the dependent parameters (scale), important! 
+regionList[[1]] = c(rep(1,35),0) # we have 35 objects, the meaning of 0?
+for (j in 2:p) {
+  xj = CanadianWeather$region == regions[j-1] # dummy variables
+  regionList[[j]] = c(xj,1) # the meaning of 1? Step 2
+}
+
+# initial beta
+betabasis = create.fourier.basis(c(0, 365), 11) # how to determine the num of betabasis?
+betafdPar = fdPar(betabasis) # tranfer to fd type
+betaList = vector("list",p)
+for (j in 1:p){
+  betaList[[j]] = betafdPar # function of t, beta fd  Step 3
+}
+
+fRegressList = fRegress(temp36fd, regionList, betaList) # there are three parts
+betaestList = fRegressList$betaestlist # beta estimation, function of t, need to interpret
+par(mfrow=c(2,2))
+for(j in 1:4){
+  plot(betaestList[[j]],col=j,main=paste("beta",j),ylim=c(-16,16)) # Plot the Beta Coefficients
+  abline(h=0,lty=2)
+}
+par(mfrow=c(1,1))
+regionFit = fRegressList$yhatfd
+plot(regionFit, lwd=2, lty=1,xlab="Day", ylab="Temperature",
+     ylim=c(-30,20),main="Prediction") # Plot the yhat for different catergory
+
+# Choose the best lambda by using CV
+lambda = exp(10:14) 
+zmat = cbind(regionList[[1]],regionList[[2]],regionList[[3]],
+             regionList[[4]],regionList[[5]]) # dummy variable (dependent) for catergory data
+CVmat = matrix(0,length(lambda),35) # initial, the num of 35? should be calculated 
+tbetalist = list()
+tZlist = list()
+for(i in 1:length(lambda)){ # warning: it takes very long time
+  for(j in 1:35){
+    for(k in 1:5){
+      tbetalist[[k]] = fdPar(betabasis,2,lambda[i]) # 2 denote the 2nd derivate
+      tZlist[[k]] = zmat[-j,k]
+    }
+    tres = fRegress(temp36fd[-j],tZlist,tbetalist)
+    yhat = 0
+    for(k in 1:5){
+      yhat = yhat + zmat[j,k]*tres$betaestlist[[k]]$fd
+    }
+    err = temp36fd[j] - yhat
+    CVmat[i,j] = inprod(err,err) # this formula need to understand?
+  }
+}
+save(CVmat,file="CVmat.RData")
+CV = apply(CVmat,1,mean)
+plot(log(lambda),CV,type='l')
+best = which.min(CV)
+abline(h=CV[best], v= log(lambda[best]))
+grid()
+
+betabasis = create.fourier.basis(c(0, 365), 11)
+betafdPar = fdPar(betabasis,2,lambda[best]) # roughness penalty given by CV
+betaList = vector("list",p)
+for (j in 1:p){
+  betaList[[j]] = betafdPar
+}
+
+fRegressList = fRegress(temp36fd, regionList, betaList)
+betaestList = fRegressList$betaestlist
+regionFit = fRegressList$yhatfd
+regions = c("Canada", regions) # show the constant beta function, the canada temperature
+par(mfrow=c(2,3),cex=1)
+for (j in 1:p){
+  plot(betaestList[[j]]$fd, lwd=2,col=j,
+       xlab="Day",ylim=c(-20,20),
+       ylab="", main=regions[j]) # along with the predicted curves for the regions
+}
+plot(regionFit, lwd=2, lty=1,xlab="Day", ylab="",ylim=c(-30,20),main="Prediction")
+
+# calculate the C.I.
+yhatmat = eval.fd(day.5, regionFit[-36]) # so, why we need to add one more col?
+resid = daily$tempav - yhatmat # we must have the same type
+Sigma = var(t(resid)) 
+y2cMap = smooth.basis(day.5, daily$tempav, tempfdPar)$y2cMap # the value of y2cMap need to remember
+stderrList = fRegress.stderr(fRegressList, y2cMap, Sigma) # formaula!
+save(stderrList,file = "Std.RData")
+betastderrlist = stderrList$betastderrlist
+par(mfrow=c(2,3),cex=1)
+for (j in 1:p){
+  beta = betaestList[[j]]$fd
+  plot(beta, lwd=2,ylim=c(-20,20),
+       xlab="Day",
+       ylab="", main=regions[j]) 
+  lines(beta + 2*betastderrlist[[j]],lty=2, lwd=1)
+  lines(beta - 2*betastderrlist[[j]], lty=2, lwd=1)
+  abline(h=0,lty=3)
+}
+
+par(mfrow=c(2,3),cex=1)
+plotbeta(betaestList,betastderrlist,day.5) # plot all beta coeffecients
+
+```
+
+
+## We use the refund package to model functional response(functional-functional)
+```{r Data, message=FALSE, warning=FALSE}
+library(refund)
+data(DTI)
+DTI1 <- DTI[DTI$visit==1 & complete.cases(DTI),]
+# We can apply various preprocessing options to the DTI data
+fit1 <- pfr(pasat ~ lf(cca, k=30), data=DTI1)
+fit2 <- pfr(pasat ~ lf(cca, k=30, presmooth="fpca.sc",
+presmooth.opts=list(nbasis=8, pve=.975)), data=DTI1)
+fit3 <- pfr(pasat ~ lf(cca, k=30, presmooth="fpca.face",
+presmooth.opts=list(m=3, npc=9)), data=DTI1)
+fit4 <- pfr(pasat ~ lf(cca, k=30, presmooth="fpca.ssvd"), data=DTI1)
+fit5 <- pfr(pasat ~ lf(cca, k=30, presmooth="bspline",
+presmooth.opts=list(nbasis=8)), data=DTI1)
+fit6 <- pfr(pasat ~ lf(cca, k=30, presmooth="interpolate"), data=DTI1)
+# All models should result in similar fits
+fits <- as.data.frame(lapply(1:6, function(i)
+get(paste0("fit",i))$fitted.values))
+names(fits) <- c("none", "fpca.sc", "fpca.face", "fpca.ssvd", "bspline", "interpolate")
+pairs(fits)
+
+# Fit model with linear functional term for CCA
+fit.lf <- pfr(pasat ~ lf(cca, k=30, bs="ps"), data=DTI1)
+plot(fit.lf, ylab=expression(paste(beta(t))), xlab="t")
+
+# Functional response
+set.seed(2121)
+data1 <- pffrSim(scenario="ff", n=40)
+t <- attr(data1, "yindex")
+s <- attr(data1, "xindex")
+m1 <- pffr(Y ~ ff(X1, xind=s), yind=t, data=data1)
+summary(m1)
+plot(m1, pers=TRUE, pages=1)
+```
